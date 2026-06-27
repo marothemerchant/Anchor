@@ -31,6 +31,13 @@ export interface KeyStatus {
   anchor: "idle" | "checking" | "ok" | "error";
 }
 
+// Anchor Browser session tracking
+export interface AnchorSession {
+  sessionId: string;
+  createdAt: Date;
+  lastUsed: Date;
+}
+
 export function getProvider(model: string): Provider {
   if (model.startsWith("gpt-")) return "openai";
   if (model.startsWith("gemini-")) return "gemini";
@@ -137,22 +144,149 @@ async function streamGemini(
   }
 }
 
+/**
+ * Extract output from Anchor Browser API response.
+ * Handles various response shapes: { data, result, output, extracted_text, screenshot, elements, success, etc. }
+ */
+function extractAnchorOutput(response: Record<string, any>): string {
+  // Direct success message
+  if (response.success && typeof response.success === "string") {
+    return response.success;
+  }
+
+  // Extracted text content
+  if (response.extracted_text) {
+    return typeof response.extracted_text === "string"
+      ? response.extracted_text
+      : JSON.stringify(response.extracted_text, null, 2);
+  }
+
+  // Common response fields
+  if (response.data) {
+    return typeof response.data === "string"
+      ? response.data
+      : JSON.stringify(response.data, null, 2);
+  }
+
+  if (response.result) {
+    return typeof response.result === "string"
+      ? response.result
+      : JSON.stringify(response.result, null, 2);
+  }
+
+  if (response.output) {
+    return typeof response.output === "string"
+      ? response.output
+      : JSON.stringify(response.output, null, 2);
+  }
+
+  // Element detection results
+  if (response.elements && Array.isArray(response.elements)) {
+    return `Found ${response.elements.length} elements:\n${JSON.stringify(response.elements, null, 2)}`;
+  }
+
+  // Screenshot confirmation
+  if (response.screenshot) {
+    return `[Screenshot captured: ${typeof response.screenshot === "string" ? response.screenshot : "image data"}]`;
+  }
+
+  // Screenshot URL
+  if (response.screenshot_url) {
+    return `[Screenshot: ${response.screenshot_url}]`;
+  }
+
+  // Fallback: return entire response as JSON
+  return JSON.stringify(response, null, 2);
+}
+
+/**
+ * Execute an Anchor Browser task with optional session persistence.
+ * Supports multi-step workflows via sessionId.
+ */
 async function runAnchorWebTask(
   apiKey: string,
   task: string,
+  sessionId: string | null,
   onChunk: (text: string) => void
-): Promise<void> {
-  const response = await fetch("https://api.anchorbrowser.io/v1/tools/perform-web-task", {
-    method: "POST",
-    headers: { "anchor-api-key": apiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ task, headless: true }),
-  });
-  if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
-  const data = await response.json();
-  const result = typeof data === "string" ? data : JSON.stringify(data, null, 2);
-  for (const char of result) {
-    onChunk(char);
-    await new Promise((r) => setTimeout(r, 4));
+): Promise<{ sessionId: string | null; error?: string }> {
+  const payload: Record<string, any> = {
+    prompt: task,
+    detect_elements: true, // Help Anchor find clickable elements
+    headless: true,        // Run in headless mode
+  };
+
+  // Add URL if task contains a URL-like pattern (optional enhancement)
+  const urlMatch = task.match(https?:\/\/[^\s]+/);
+  if (urlMatch) {
+    payload.url = urlMatch[0];
+  }
+
+  // Use existing session for multi-step workflows
+  if (sessionId) {
+    payload.sessionId = sessionId;
+  }
+
+  try {
+    const response = await fetch("https://api.anchorbrowser.io/v1/tools/perform-web-task", {
+      method: "POST",
+      headers: {
+        "anchor-api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        sessionId: null,
+        error: `Anchor API Error (${response.status}): ${errorText}`,
+      };
+    }
+
+    const data = await response.json();
+
+    // Extract and stream the output
+    const output = extractAnchorOutput(data);
+    for (const char of output) {
+      onChunk(char);
+      await new Promise((r) => setTimeout(r, 4)); // Simulate streaming
+    }
+
+    // Return sessionId if provided in response (for multi-step workflows)
+    const newSessionId = data.sessionId || sessionId;
+
+    return { sessionId: newSessionId };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      sessionId: null,
+      error: `Network error: ${errorMsg}. Check CORS or API key validity.`,
+    };
+  }
+}
+
+/**
+ * Create a new Anchor Browser session.
+ * Useful for multi-step workflows to maintain browser state.
+ */
+async function createAnchorSession(apiKey: string): Promise<string | null> {
+  try {
+    const response = await fetch("https://api.anchorbrowser.io/v1/sessions", {
+      method: "POST",
+      headers: {
+        "anchor-api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    return data.sessionId || data.id || null;
+  } catch {
+    return null;
   }
 }
 
@@ -179,13 +313,18 @@ export async function validateKey(provider: Provider, key: string): Promise<bool
       return r.status !== 401 && r.status !== 403;
     }
     if (provider === "anchor") {
-      // Anchor's sessions endpoint may have CORS restrictions from the browser.
-      // We use a minimal GET that returns 200 on valid key.
+      // Try creating a session to validate the key.
+      // This is the most reliable way to check Anchor API key validity.
       const r = await fetch("https://api.anchorbrowser.io/v1/sessions", {
-        method: "GET",
-        headers: { "anchor-api-key": key },
+        method: "POST",
+        headers: {
+          "anchor-api-key": key,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
       });
-      return r.status !== 401 && r.status !== 403;
+      // Accept 200/201 as valid. 401/403 or network errors indicate invalid key.
+      return r.status === 200 || r.status === 201;
     }
   } catch {
     // CORS network error — if key is non-empty, assume it may be valid.
@@ -218,6 +357,9 @@ export function useAnchorAgent() {
   settingsRef.current = settings;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+
+  // Track Anchor session for multi-step workflows
+  const anchorSessionRef = useRef<string | null>(null);
 
   const updateSetting = useCallback(<K extends keyof AgentSettings>(key: K, value: AgentSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -298,8 +440,18 @@ export function useAnchorAgent() {
 
     if (provider === "anchor") {
       if (!apiKey) { finishMessage("error", "No Anchor API key set"); return; }
-      runAnchorWebTask(apiKey, task, onChunk)
-        .then(() => finishMessage("done"))
+      runAnchorWebTask(apiKey, task, anchorSessionRef.current, onChunk)
+        .then((result) => {
+          // Update session for multi-step workflows
+          if (result.sessionId) {
+            anchorSessionRef.current = result.sessionId;
+          }
+          if (result.error) {
+            finishMessage("error", result.error);
+          } else {
+            finishMessage("done");
+          }
+        })
         .catch((err) => finishMessage("error", err.message));
       return;
     }
@@ -332,7 +484,10 @@ export function useAnchorAgent() {
       .catch((err) => { if (err.name !== "AbortError") finishMessage("error", err.message); });
   }, []);
 
-  const clearThread = useCallback(() => setMessages([]), []);
+  const clearThread = useCallback(() => {
+    setMessages([]);
+    anchorSessionRef.current = null; // Reset session on clear
+  }, []);
 
   return { messages, settings, updateSetting, sendTask, clearThread, keyStatus, checkKey, checkAllKeys };
 }
