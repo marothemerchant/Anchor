@@ -1,0 +1,98 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-surface: hsl(var(--surface));
+  --color-border: hsl(var(--border));
+  --color-text-primary: hsl(var(--text-primary));
+  --color-text-secondary: hsl(var(--text-secondary));
+  --color-text-tertiary: hsl(var(--text-tertiary));
+  --color-accent: hsl(var(--accent));
+  --color-success: hsl(var(--success));
+  --color-error: hsl(var(--error));
+
+  --color-foreground: hsl(var(--text-primary));
+
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+  --font-sans: 'JetBrains Mono', 'Courier New', monospace; /* override sans to be mono too */
+
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius: 0px;
+}
+
+:root {
+  --background: 24 8% 9%; /* #181614 */
+  --surface: 24 7% 11%; /* #1E1C1A */
+  --border: 36 6% 15%; /* #2A2825 */
+  --text-primary: 36 11% 76%; /* #C8C4BE */
+  --text-secondary: 27 4% 46%; /* #7A7571 */
+  --text-tertiary: 20 4% 28%; /* #4A4644 */
+  --accent: 36 18% 89%; /* #E8E4DE */
+  --success: 120 15% 42%; /* #5A7A5A */
+  --error: 0 24% 38%; /* #7A4A4A */
+
+  --foreground: var(--text-primary);
+  --radius: 0px;
+}
+
+.dark {
+  --background: 24 8% 9%; /* #181614 */
+  --surface: 24 7% 11%; /* #1E1C1A */
+  --border: 36 6% 15%; /* #2A2825 */
+  --text-primary: 36 11% 76%; /* #C8C4BE */
+  --text-secondary: 27 4% 46%; /* #7A7571 */
+  --text-tertiary: 20 4% 28%; /* #4A4644 */
+  --accent: 36 18% 89%; /* #E8E4DE */
+  --success: 120 15% 42%; /* #5A7A5A */
+  --error: 0 24% 38%; /* #7A4A4A */
+
+  --foreground: var(--text-primary);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    border-radius: 0 !important;
+  }
+
+  body {
+    @apply font-mono antialiased bg-background text-text-primary;
+    line-height: 1.6;
+    font-size: 12px;
+  }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.animate-blink {
+  animation: blink 1.1s step-end infinite;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--text-tertiary));
+}
