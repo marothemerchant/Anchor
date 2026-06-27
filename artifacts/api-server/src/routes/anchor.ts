@@ -59,7 +59,7 @@ router.post("/anchor/task", async (req, res) => {
     const response = await fetch(url, {
       method: "POST",
       headers: anchorHeaders(apiKey),
-      body: JSON.stringify({ task }),
+      body: JSON.stringify({ prompt: task }),
     });
 
     const data = await response.json() as Record<string, unknown>;
