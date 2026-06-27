@@ -4,23 +4,18 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { ConversationThread } from "@/components/ConversationThread";
 import { CommandInput } from "@/components/CommandInput";
 import { ModelSelector } from "@/components/ModelSelector";
+import { LiveViewPanel } from "@/components/LiveViewPanel";
 import { PanelLeft } from "lucide-react";
 
 export default function Terminal() {
   const {
-    messages,
-    settings,
-    updateSetting,
-    sendTask,
-    clearThread,
-    keyStatus,
-    checkKey,
-    checkAllKeys,
+    messages, settings, updateSetting, sendTask, clearThread,
+    keyStatus, checkKey, checkAllKeys,
+    liveViewUrl, liveSessionId, closeLiveView,
   } = useAnchorAgent();
 
   const [panelOpen, setPanelOpen] = useState(false);
 
-  // Auto-validate all keys that have values on mount
   useEffect(() => {
     checkAllKeys();
   }, []);
@@ -31,19 +26,23 @@ export default function Terminal() {
 
   const activeStatus = keyStatus[provider];
   const headerStatusColor =
-    activeStatus === "ok"
-      ? "var(--color-success)"
-      : activeStatus === "error"
-      ? "var(--color-error)"
-      : activeStatus === "checking"
-      ? "var(--color-text-secondary)"
-      : hasKey
-      ? "var(--color-text-tertiary)"
-      : "var(--color-error)";
+    activeStatus === "ok" ? "var(--color-success)"
+    : activeStatus === "error" ? "var(--color-error)"
+    : activeStatus === "checking" ? "var(--color-text-secondary)"
+    : hasKey ? "var(--color-text-tertiary)"
+    : "var(--color-error)";
+
+  const headerStatusText =
+    activeStatus === "checking" ? "..."
+    : activeStatus === "ok" ? provider
+    : activeStatus === "error" ? "key error"
+    : hasKey ? provider
+    : "no key";
 
   return (
     <div className="flex flex-col h-screen w-full bg-background overflow-hidden font-mono text-text-primary selection:bg-surface selection:text-accent">
 
+      {/* HEADER */}
       <header className="h-[36px] flex items-center justify-between px-4 border-b border-border shrink-0 bg-background z-10 relative">
         <div className="w-[100px] text-accent text-[11px] tracking-[0.2em] font-medium select-none">
           ANCHOR
@@ -59,7 +58,7 @@ export default function Terminal() {
             style={{ color: headerStatusColor }}
             title={`${provider} key: ${activeStatus}`}
           >
-            {activeStatus === "checking" ? "..." : activeStatus === "ok" ? provider : activeStatus === "error" ? "key error" : hasKey ? provider : "no key"}
+            {headerStatusText}
           </div>
           <button
             onClick={() => setPanelOpen(!panelOpen)}
@@ -72,7 +71,9 @@ export default function Terminal() {
         </div>
       </header>
 
+      {/* MAIN LAYOUT */}
       <div className="flex flex-1 overflow-hidden">
+        {/* Left: settings panel */}
         <SettingsPanel
           isOpen={panelOpen}
           settings={settings}
@@ -82,7 +83,8 @@ export default function Terminal() {
           onCheckAll={checkAllKeys}
         />
 
-        <main className="flex-1 flex flex-col min-w-0 bg-background relative">
+        {/* Center: conversation + input */}
+        <main className="flex-1 flex flex-col min-w-0 bg-background relative overflow-hidden">
           <ConversationThread
             messages={messages}
             onClear={clearThread}
@@ -94,6 +96,13 @@ export default function Terminal() {
             disabledReason={hasKey ? undefined : `NO ${provider.toUpperCase()} KEY`}
           />
         </main>
+
+        {/* Right: live view panel (Anchor only) */}
+        <LiveViewPanel
+          liveViewUrl={liveViewUrl}
+          sessionId={liveSessionId}
+          onClose={closeLiveView}
+        />
       </div>
     </div>
   );
