@@ -19,6 +19,10 @@ const MODEL_GROUPS = [
     label: "GROQ",
     models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
   },
+  {
+    label: "ANCHOR",
+    models: ["anchor-web-task"],
+  },
 ];
 
 export function ModelSelector({ settings, updateSetting }: ModelSelectorProps) {
@@ -30,11 +34,7 @@ export function ModelSelector({ settings, updateSetting }: ModelSelectorProps) {
       className="bg-transparent text-text-primary text-[11px] font-mono outline-none border-none cursor-pointer appearance-none text-center hover:text-accent transition-colors"
     >
       {MODEL_GROUPS.map((group) => (
-        <optgroup
-          key={group.label}
-          label={group.label}
-          className="bg-surface text-text-secondary"
-        >
+        <optgroup key={group.label} label={group.label} className="bg-surface text-text-secondary">
           {group.models.map((m) => (
             <option key={m} value={m} className="bg-surface text-text-primary">
               {m}

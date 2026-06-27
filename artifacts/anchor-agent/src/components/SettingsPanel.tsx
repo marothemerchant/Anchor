@@ -1,11 +1,28 @@
 import React, { useState } from "react";
-import { AgentSettings, getProvider } from "@/hooks/useAnchorAgent";
+import { AgentSettings, KeyStatus, Provider, getProvider } from "@/hooks/useAnchorAgent";
 
 interface SettingsPanelProps {
   isOpen: boolean;
   settings: AgentSettings;
+  keyStatus: KeyStatus;
   updateSetting: <K extends keyof AgentSettings>(key: K, value: AgentSettings[K]) => void;
+  onCheckKey: (provider: Provider) => void;
+  onCheckAll: () => void;
 }
+
+const STATUS_LABEL: Record<string, string> = {
+  idle: "——",
+  checking: "...",
+  ok: "OK",
+  error: "FAIL",
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  idle: "var(--color-text-tertiary)",
+  checking: "var(--color-text-secondary)",
+  ok: "var(--color-success)",
+  error: "var(--color-error)",
+};
 
 function KeyField({
   label,
@@ -13,44 +30,76 @@ function KeyField({
   onChange,
   placeholder,
   active,
+  status,
+  onCheck,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   active: boolean;
+  status: string;
+  onCheck: () => void;
 }) {
   const [show, setShow] = useState(false);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
-        <label className="text-[10px] uppercase tracking-wider select-none" style={{ color: active ? "var(--color-accent)" : "var(--color-text-secondary)" }}>
+        <label
+          className="text-[10px] uppercase tracking-wider select-none"
+          style={{ color: active ? "var(--color-accent)" : "var(--color-text-secondary)" }}
+        >
           {label}
-          {active && <span className="ml-2 text-[9px] text-text-tertiary normal-case tracking-normal">active</span>}
+          {active && (
+            <span className="ml-2 text-[9px] normal-case tracking-normal" style={{ color: "var(--color-text-tertiary)" }}>
+              active
+            </span>
+          )}
         </label>
-        {value && (
-          <button
-            onClick={() => setShow((s) => !s)}
-            tabIndex={-1}
-            className="text-[9px] text-text-tertiary hover:text-text-secondary transition-colors uppercase"
-          >
-            {show ? "HIDE" : "SHOW"}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono" style={{ color: STATUS_COLOR[status] }}>
+            {STATUS_LABEL[status]}
+          </span>
+          {value && (
+            <button
+              onClick={() => setShow((s) => !s)}
+              tabIndex={-1}
+              className="text-[9px] uppercase transition-colors"
+              style={{ color: "var(--color-text-tertiary)" }}
+            >
+              {show ? "HIDE" : "SHOW"}
+            </button>
+          )}
+        </div>
       </div>
-      <input
-        type={show ? "text" : "password"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        data-testid={`input-${label.toLowerCase().replace(/\s/g, "-")}`}
-        className="w-full bg-background border border-border text-text-primary p-2 text-[12px] outline-none focus:border-accent font-mono placeholder:text-text-tertiary transition-colors"
-      />
+      <div className="flex gap-1">
+        <input
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="flex-1 min-w-0 bg-background border border-border text-text-primary p-2 text-[12px] outline-none focus:border-accent font-mono placeholder:text-text-tertiary transition-colors"
+        />
+        <button
+          onClick={onCheck}
+          disabled={!value.trim() || status === "checking"}
+          className="px-2 text-[9px] uppercase border border-border text-text-tertiary hover:text-text-primary hover:border-text-secondary transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+        >
+          {status === "checking" ? "..." : "TEST"}
+        </button>
+      </div>
     </div>
   );
 }
 
-export function SettingsPanel({ isOpen, settings, updateSetting }: SettingsPanelProps) {
+export function SettingsPanel({
+  isOpen,
+  settings,
+  keyStatus,
+  updateSetting,
+  onCheckKey,
+  onCheckAll,
+}: SettingsPanelProps) {
   const provider = getProvider(settings.model);
 
   return (
@@ -60,9 +109,14 @@ export function SettingsPanel({ isOpen, settings, updateSetting }: SettingsPanel
     >
       <div className="w-[280px] p-4 flex flex-col gap-5 overflow-y-auto h-full">
 
-        <div className="flex flex-col gap-1 pb-1">
+        <div className="flex items-center justify-between">
           <span className="text-[10px] text-text-secondary uppercase tracking-wider select-none">API KEYS</span>
-          <span className="text-[10px] text-text-tertiary">one key per provider</span>
+          <button
+            onClick={onCheckAll}
+            className="text-[9px] uppercase text-text-tertiary hover:text-text-primary border border-border px-2 py-1 transition-colors"
+          >
+            TEST ALL
+          </button>
         </div>
 
         <KeyField
@@ -71,6 +125,8 @@ export function SettingsPanel({ isOpen, settings, updateSetting }: SettingsPanel
           onChange={(v) => updateSetting("openaiKey", v)}
           placeholder="sk-..."
           active={provider === "openai"}
+          status={keyStatus.openai}
+          onCheck={() => onCheckKey("openai")}
         />
 
         <KeyField
@@ -79,6 +135,8 @@ export function SettingsPanel({ isOpen, settings, updateSetting }: SettingsPanel
           onChange={(v) => updateSetting("geminiKey", v)}
           placeholder="AIza..."
           active={provider === "gemini"}
+          status={keyStatus.gemini}
+          onCheck={() => onCheckKey("gemini")}
         />
 
         <KeyField
@@ -87,7 +145,26 @@ export function SettingsPanel({ isOpen, settings, updateSetting }: SettingsPanel
           onChange={(v) => updateSetting("groqKey", v)}
           placeholder="gsk_..."
           active={provider === "groq"}
+          status={keyStatus.groq}
+          onCheck={() => onCheckKey("groq")}
         />
+
+        <KeyField
+          label="ANCHOR KEY"
+          value={settings.anchorKey}
+          onChange={(v) => updateSetting("anchorKey", v)}
+          placeholder="anchor_..."
+          active={provider === "anchor"}
+          status={keyStatus.anchor}
+          onCheck={() => onCheckKey("anchor")}
+        />
+
+        <div className="h-px bg-border w-full" />
+
+        <div className="flex flex-col gap-1 text-[10px] text-text-tertiary leading-relaxed">
+          <span className="text-text-secondary uppercase tracking-wider">ANCHOR BROWSER</span>
+          <span>Select "anchor-web-task" from the model dropdown to route tasks through Anchor Browser for live web interaction — scraping, form submission, authenticated sessions.</span>
+        </div>
 
         <div className="h-px bg-border w-full" />
 

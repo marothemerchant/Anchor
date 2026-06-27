@@ -12,20 +12,29 @@ export interface Message {
   elapsed?: number;
 }
 
+export type Provider = "openai" | "gemini" | "groq" | "anchor";
+
 export interface AgentSettings {
   openaiKey: string;
   geminiKey: string;
   groqKey: string;
+  anchorKey: string;
   systemPrompt: string;
   temperature: number;
   model: string;
 }
 
-export type Provider = "openai" | "gemini" | "groq";
+export interface KeyStatus {
+  openai: "idle" | "checking" | "ok" | "error";
+  gemini: "idle" | "checking" | "ok" | "error";
+  groq: "idle" | "checking" | "ok" | "error";
+  anchor: "idle" | "checking" | "ok" | "error";
+}
 
 export function getProvider(model: string): Provider {
   if (model.startsWith("gpt-")) return "openai";
   if (model.startsWith("gemini-")) return "gemini";
+  if (model === "anchor-web-task") return "anchor";
   return "groq";
 }
 
@@ -33,22 +42,9 @@ export function getActiveKey(settings: AgentSettings): string {
   const p = getProvider(settings.model);
   if (p === "openai") return settings.openaiKey;
   if (p === "gemini") return settings.geminiKey;
+  if (p === "anchor") return settings.anchorKey;
   return settings.groqKey;
 }
-
-const generateSimulatedResponse = (task: string): string => {
-  const t = task.toLowerCase();
-  if (t.includes("summarize") || t.includes("summary")) {
-    return `- Key points extracted from context.\n- Found 3 major themes regarding process optimization.\n- Action items identified and formatted.\n\nSummary complete. [simulated]`;
-  }
-  if (t.includes("code") || t.includes("script") || t.includes("function")) {
-    return `Here is the requested implementation:\n\`\`\`javascript\nfunction executeTask() {\n  console.log("Running optimized protocol...");\n  return true;\n}\n\`\`\`\nTested and ready. [simulated]`;
-  }
-  if (t.includes("ping") || t.includes("hello") || t.includes("test")) {
-    return `PONG. System online and awaiting commands. [simulated]`;
-  }
-  return `Acknowledged task: "${task}".\nProcessing parameters...\nExecuting default protocol.\nResult: Task completed successfully within nominal parameters. [simulated]`;
-};
 
 async function streamOpenAICompat(
   endpoint: string,
@@ -61,23 +57,15 @@ async function streamOpenAICompat(
 ): Promise<void> {
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ model, messages, temperature, stream: true }),
     signal,
   });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`${response.status}: ${err}`);
-  }
+  if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
 
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -93,9 +81,7 @@ async function streamOpenAICompat(
         const parsed = JSON.parse(data);
         const content = parsed.choices?.[0]?.delta?.content;
         if (content) onChunk(content);
-      } catch {
-        // ignore malformed SSE chunks
-      }
+      } catch { /* ignore */ }
     }
   }
 }
@@ -111,23 +97,14 @@ async function streamGemini(
   signal: AbortSignal
 ): Promise<void> {
   const contents: { role: string; parts: { text: string }[] }[] = [];
-
   for (const msg of history) {
     if (msg.status !== "done") continue;
-    contents.push({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content }],
-    });
+    contents.push({ role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] });
   }
   contents.push({ role: "user", parts: [{ text: userTask }] });
 
-  const body: Record<string, unknown> = {
-    contents,
-    generationConfig: { temperature },
-  };
-  if (systemPrompt.trim()) {
-    body.system_instruction = { parts: [{ text: systemPrompt }] };
-  }
+  const body: Record<string, unknown> = { contents, generationConfig: { temperature } };
+  if (systemPrompt.trim()) body.system_instruction = { parts: [{ text: systemPrompt }] };
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
   const response = await fetch(url, {
@@ -136,16 +113,11 @@ async function streamGemini(
     body: JSON.stringify(body),
     signal,
   });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`${response.status}: ${err}`);
-  }
+  if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
 
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -160,19 +132,83 @@ async function streamGemini(
         const parsed = JSON.parse(data);
         const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text) onChunk(text);
-      } catch {
-        // ignore malformed SSE chunks
-      }
+      } catch { /* ignore */ }
     }
   }
 }
 
+async function runAnchorWebTask(
+  apiKey: string,
+  task: string,
+  onChunk: (text: string) => void
+): Promise<void> {
+  const response = await fetch("https://api.anchorbrowser.io/v1/tools/perform-web-task", {
+    method: "POST",
+    headers: { "anchor-api-key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ task, headless: true }),
+  });
+  if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+  const data = await response.json();
+  const result = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  for (const char of result) {
+    onChunk(char);
+    await new Promise((r) => setTimeout(r, 4));
+  }
+}
+
+export async function validateKey(provider: Provider, key: string): Promise<boolean> {
+  if (!key.trim()) return false;
+  try {
+    if (provider === "openai") {
+      const r = await fetch("https://api.openai.com/v1/models", {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      // CORS preflight passes for OpenAI — treat non-401/403 as ok
+      return r.status !== 401 && r.status !== 403;
+    }
+    if (provider === "gemini") {
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`
+      );
+      return r.ok;
+    }
+    if (provider === "groq") {
+      const r = await fetch("https://api.groq.com/openai/v1/models", {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      return r.status !== 401 && r.status !== 403;
+    }
+    if (provider === "anchor") {
+      // Anchor's sessions endpoint may have CORS restrictions from the browser.
+      // We use a minimal GET that returns 200 on valid key.
+      const r = await fetch("https://api.anchorbrowser.io/v1/sessions", {
+        method: "GET",
+        headers: { "anchor-api-key": key },
+      });
+      return r.status !== 401 && r.status !== 403;
+    }
+  } catch {
+    // CORS network error — if key is non-empty, assume it may be valid.
+    // Actual errors will surface on first task execution.
+    return true;
+  }
+  return false;
+}
+
 export function useAnchorAgent() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [keyStatus, setKeyStatus] = useState<KeyStatus>({
+    openai: "idle",
+    gemini: "idle",
+    groq: "idle",
+    anchor: "idle",
+  });
+
   const [settings, setSettings] = useState<AgentSettings>({
-    openaiKey: "",
-    geminiKey: "",
-    groqKey: "",
+    openaiKey: import.meta.env.VITE_OPENAI_API_KEY ?? "",
+    geminiKey: import.meta.env.VITE_GEMINI_API_KEY ?? "",
+    groqKey: import.meta.env.VITE_GROQ_API_KEY ?? "",
+    anchorKey: import.meta.env.VITE_ANCHOR_API_KEY ?? "",
     systemPrompt: "You are ANCHOR AGENT, a precise terminal AI. Be concise and direct.",
     temperature: 0.7,
     model: "gpt-4o",
@@ -186,6 +222,27 @@ export function useAnchorAgent() {
   const updateSetting = useCallback(<K extends keyof AgentSettings>(key: K, value: AgentSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  const checkKey = useCallback(async (provider: Provider) => {
+    const s = settingsRef.current;
+    const key = provider === "openai" ? s.openaiKey
+      : provider === "gemini" ? s.geminiKey
+      : provider === "groq" ? s.groqKey
+      : s.anchorKey;
+
+    if (!key.trim()) {
+      setKeyStatus((prev) => ({ ...prev, [provider]: "idle" }));
+      return;
+    }
+    setKeyStatus((prev) => ({ ...prev, [provider]: "checking" }));
+    const ok = await validateKey(provider, key);
+    setKeyStatus((prev) => ({ ...prev, [provider]: ok ? "ok" : "error" }));
+  }, []);
+
+  const checkAllKeys = useCallback(async () => {
+    const providers: Provider[] = ["openai", "gemini", "groq", "anchor"];
+    await Promise.all(providers.map((p) => checkKey(p)));
+  }, [checkKey]);
 
   const sendTask = useCallback((task: string) => {
     if (!task.trim()) return;
@@ -239,67 +296,43 @@ export function useAnchorAgent() {
       );
     };
 
-    if (!apiKey) {
-      const simulated = generateSimulatedResponse(task);
-      let charIndex = 0;
-      const interval = setInterval(() => {
-        if (charIndex < simulated.length) {
-          onChunk(simulated[charIndex]);
-          charIndex++;
-        } else {
-          clearInterval(interval);
-          finishMessage("done");
-        }
-      }, 15);
+    if (provider === "anchor") {
+      if (!apiKey) { finishMessage("error", "No Anchor API key set"); return; }
+      runAnchorWebTask(apiKey, task, onChunk)
+        .then(() => finishMessage("done"))
+        .catch((err) => finishMessage("error", err.message));
       return;
     }
-
-    const controller = new AbortController();
 
     if (provider === "gemini") {
-      streamGemini(
-        apiKey,
-        s.model,
-        s.systemPrompt,
-        history,
-        task,
-        s.temperature,
-        onChunk,
-        controller.signal
-      )
+      if (!apiKey) { finishMessage("error", "No Gemini API key set"); return; }
+      const controller = new AbortController();
+      streamGemini(apiKey, s.model, s.systemPrompt, history, task, s.temperature, onChunk, controller.signal)
         .then(() => finishMessage("done"))
-        .catch((err) => {
-          if (err.name !== "AbortError") finishMessage("error", err.message);
-        });
+        .catch((err) => { if (err.name !== "AbortError") finishMessage("error", err.message); });
       return;
     }
 
-    const endpoint =
-      provider === "groq"
-        ? "https://api.groq.com/openai/v1/chat/completions"
-        : "https://api.openai.com/v1/chat/completions";
+    if (!apiKey) { finishMessage("error", `No ${provider} API key set`); return; }
+
+    const endpoint = provider === "groq"
+      ? "https://api.groq.com/openai/v1/chat/completions"
+      : "https://api.openai.com/v1/chat/completions";
 
     const apiMessages: { role: string; content: string }[] = [];
-    if (s.systemPrompt.trim()) {
-      apiMessages.push({ role: "system", content: s.systemPrompt });
-    }
+    if (s.systemPrompt.trim()) apiMessages.push({ role: "system", content: s.systemPrompt });
     for (const msg of history) {
-      if (msg.status === "done") {
-        apiMessages.push({ role: msg.role, content: msg.content });
-      }
+      if (msg.status === "done") apiMessages.push({ role: msg.role, content: msg.content });
     }
     apiMessages.push({ role: "user", content: task });
 
+    const controller = new AbortController();
     streamOpenAICompat(endpoint, apiKey, s.model, apiMessages, s.temperature, onChunk, controller.signal)
       .then(() => finishMessage("done"))
-      .catch((err) => {
-        if (err.name !== "AbortError") finishMessage("error", err.message);
-      });
+      .catch((err) => { if (err.name !== "AbortError") finishMessage("error", err.message); });
   }, []);
 
-  const clearThread = useCallback(() => {
-    setMessages([]);
-  }, []);
+  const clearThread = useCallback(() => setMessages([]), []);
 
-  return { messages, settings, updateSetting, sendTask, clearThread, getProvider, getActiveKey };
+  return { messages, settings, updateSetting, sendTask, clearThread, keyStatus, checkKey, checkAllKeys };
 }

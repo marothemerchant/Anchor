@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useAnchorAgent, getProvider, getActiveKey } from "@/hooks/useAnchorAgent";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { ConversationThread } from "@/components/ConversationThread";
@@ -7,12 +7,39 @@ import { ModelSelector } from "@/components/ModelSelector";
 import { PanelLeft } from "lucide-react";
 
 export default function Terminal() {
-  const { messages, settings, updateSetting, sendTask, clearThread } = useAnchorAgent();
+  const {
+    messages,
+    settings,
+    updateSetting,
+    sendTask,
+    clearThread,
+    keyStatus,
+    checkKey,
+    checkAllKeys,
+  } = useAnchorAgent();
+
   const [panelOpen, setPanelOpen] = useState(false);
+
+  // Auto-validate all keys that have values on mount
+  useEffect(() => {
+    checkAllKeys();
+  }, []);
 
   const provider = getProvider(settings.model);
   const activeKey = getActiveKey(settings);
   const hasKey = activeKey.trim().length > 0;
+
+  const activeStatus = keyStatus[provider];
+  const headerStatusColor =
+    activeStatus === "ok"
+      ? "var(--color-success)"
+      : activeStatus === "error"
+      ? "var(--color-error)"
+      : activeStatus === "checking"
+      ? "var(--color-text-secondary)"
+      : hasKey
+      ? "var(--color-text-tertiary)"
+      : "var(--color-error)";
 
   return (
     <div className="flex flex-col h-screen w-full bg-background overflow-hidden font-mono text-text-primary selection:bg-surface selection:text-accent">
@@ -28,10 +55,11 @@ export default function Terminal() {
 
         <div className="w-[100px] flex justify-end items-center gap-3">
           <div
-            className="text-[9px] uppercase tracking-wider select-none"
-            style={{ color: hasKey ? "var(--color-success)" : "var(--color-error)" }}
+            className="text-[9px] uppercase tracking-wider select-none font-mono"
+            style={{ color: headerStatusColor }}
+            title={`${provider} key: ${activeStatus}`}
           >
-            {provider}
+            {activeStatus === "checking" ? "..." : activeStatus === "ok" ? provider : activeStatus === "error" ? "key error" : hasKey ? provider : "no key"}
           </div>
           <button
             onClick={() => setPanelOpen(!panelOpen)}
@@ -48,7 +76,10 @@ export default function Terminal() {
         <SettingsPanel
           isOpen={panelOpen}
           settings={settings}
+          keyStatus={keyStatus}
           updateSetting={updateSetting}
+          onCheckKey={checkKey}
+          onCheckAll={checkAllKeys}
         />
 
         <main className="flex-1 flex flex-col min-w-0 bg-background relative">
