@@ -137,47 +137,41 @@ async function streamGemini(
   }
 }
 
-async function createAnchorSession(apiKey: string): Promise<{ sessionId: string; liveViewUrl: string } | null> {
-  const res = await fetch("https://api.anchorbrowser.io/v1/sessions", {
+const PROXY_BASE = "/api";
+
+async function createAnchorSession(): Promise<{ sessionId: string; liveViewUrl: string } | null> {
+  const res = await fetch(`${PROXY_BASE}/anchor/sessions`, {
     method: "POST",
-    headers: { "anchor-api-key": apiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      browser: { headless: { active: false } },
-      session: {
-        recording: { active: false },
-        proxy: { active: true },
-        timeout: { idle_timeout: 5, max_duration: 10 },
-      },
-    }),
+    headers: { "Content-Type": "application/json" },
   });
-  if (!res.ok) return null;
-  const data = await res.json();
-  const sessionId = data.data?.id;
-  const liveViewUrl = data.data?.live_view_url;
-  if (!sessionId || !liveViewUrl) return null;
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `session create failed: ${res.status}`);
+  }
+  const data = await res.json() as { sessionId?: string; liveViewUrl?: string };
+  const { sessionId, liveViewUrl } = data;
+  if (!sessionId || !liveViewUrl) throw new Error("no sessionId/liveViewUrl in response");
   return { sessionId, liveViewUrl };
 }
 
 async function runAnchorTask(
-  apiKey: string,
   task: string,
   sessionId: string | null,
   onChunk: (text: string) => void
 ): Promise<void> {
-  const url = sessionId
-    ? `https://api.anchorbrowser.io/v1/tools/perform-web-task?sessionId=${sessionId}`
-    : "https://api.anchorbrowser.io/v1/tools/perform-web-task";
-
-  const response = await fetch(url, {
+  const response = await fetch(`${PROXY_BASE}/anchor/task`, {
     method: "POST",
-    headers: { "anchor-api-key": apiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ task }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task, sessionId }),
   });
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
 
-  const data = await response.json();
-  // Extract result — Anchor returns nested data.result.result or data.result
-  const raw = data.data?.result?.result ?? data.data?.result ?? data.result ?? data;
+  const data = await response.json() as Record<string, unknown>;
+  const raw =
+    (data as { data?: { result?: { result?: unknown; [k: string]: unknown } } }).data?.result?.result ??
+    (data as { data?: { result?: unknown } }).data?.result ??
+    (data as { result?: unknown }).result ??
+    data;
   const result = typeof raw === "string" ? raw : JSON.stringify(raw, null, 2);
 
   for (const char of result) {
@@ -186,10 +180,9 @@ async function runAnchorTask(
   }
 }
 
-async function closeAnchorSession(apiKey: string, sessionId: string): Promise<void> {
-  await fetch(`https://api.anchorbrowser.io/v1/sessions/${sessionId}`, {
+async function closeAnchorSession(sessionId: string): Promise<void> {
+  await fetch(`${PROXY_BASE}/anchor/sessions/${sessionId}`, {
     method: "DELETE",
-    headers: { "anchor-api-key": apiKey },
   }).catch(() => { /* best-effort */ });
 }
 
@@ -274,7 +267,7 @@ export function useAnchorAgent() {
   const closeLiveView = useCallback(() => {
     const sid = liveSessionIdRef.current;
     const s = settingsRef.current;
-    if (sid && s.anchorKey) closeAnchorSession(s.anchorKey, sid);
+    if (sid) closeAnchorSession(sid);
     setLiveViewUrl(null);
     setLiveSessionId(null);
   }, []);
@@ -327,7 +320,7 @@ export function useAnchorAgent() {
         try {
           // 1. Create a live session
           onChunk("initializing browser session...\n");
-          const session = await createAnchorSession(apiKey);
+          const session = await createAnchorSession();
 
           if (session) {
             onChunk(`session: ${session.sessionId.slice(0, 8)}...\n`);
@@ -336,11 +329,11 @@ export function useAnchorAgent() {
             setLiveSessionId(session.sessionId);
 
             // 2. Run the task inside that session
-            await runAnchorTask(apiKey, task, session.sessionId, onChunk);
+            await runAnchorTask(task, session.sessionId, onChunk);
           } else {
             // Fallback: run without live view
             onChunk("(live view unavailable — running headless)\n\n");
-            await runAnchorTask(apiKey, task, null, onChunk);
+            await runAnchorTask(task, null, onChunk);
           }
 
           finishMessage("done");
